@@ -64,3 +64,5 @@ export function chunkText(text: string, maxChunkSize = 1000, overlap = 200): str
 
   return chunks.filter((chunk) => chunk.length > 0)
 }
+
+export const chunkDocument = chunkText
