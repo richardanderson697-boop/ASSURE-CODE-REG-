@@ -1,132 +1,35 @@
-# ============================================================================
-# requirements.txt
-# ============================================================================
-fastapi==0.109.0
-uvicorn==0.27.0
-playwright==1.41.0
-beautifulsoup4==4.12.3
-langchain==0.1.0
-langchain-openai==0.0.2
-chromadb==0.4.22
-pypdf==4.0.0
-python-dotenv==1.0.0
-pydantic==2.5.3
-robotexclusionrulesparser==1.7.1
-aiohttp==3.9.1
-reportlab==4.0.9
-python-multipart==0.0.6
+# ==================# --- Stage 1: Build the Frontend ---
+FROM node:20-slim AS build-stage
+WORKDIR /app/frontend
+COPY package*.json ./
+RUN npm install
+COPY . .
+RUN npm run build
 
-# ============================================================================
-# .env (Create this file - DO NOT commit to git)
-# ============================================================================
-OPENAI_API_KEY=your-openai-api-key-here
-ANTHROPIC_API_KEY=your-anthropic-api-key-here  # Optional: for Claude instead of GPT-4
-
-# ============================================================================
-# .replit (for Replit deployment)
-# ============================================================================
-run = "python -m playwright install && uvicorn main:app --host 0.0.0.0 --port 8000"
-
-[nix]
-channel = "stable-23_11"
-
-[deployment]
-run = ["sh", "-c", "python -m playwright install && uvicorn main:app --host 0.0.0.0 --port 8000"]
-
-# ============================================================================
-# Dockerfile (for Docker deployment)
-# ============================================================================
+# --- Stage 2: Setup the Backend ---
 FROM python:3.11-slim
-
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies for Playwright/Chromium
 RUN apt-get update && apt-get install -y \
-    wget \
-    gnupg \
+    libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
+    libxkbcommon0 libxcomposite1 libxdamage1 libxext6 \
+    libxfixes3 libxrandr2 libgbm1 libasound2 libpangocairo-1.0-0 \
+    liblayout1 libpango-1.0-0 libharfbuzz0b libwayland-client0 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements
+# Copy backend requirements and install
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+RUN python -m playwright install chromium --with-deps
 
-# Install Playwright browsers
-RUN playwright install --with-deps chromium
-
-# Copy application
+# Copy backend code
 COPY . .
 
-# Create necessary directories
-RUN mkdir -p ./chroma_db ./reports
+# Copy built frontend files to Python's static folder
+COPY --from=build-stage /app/frontend/dist /app/static
 
-# Expose port
-EXPOSE 8000
-
-# Run application
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
-
-# ============================================================================
-# docker-compose.yml (for local development with Docker)
-# ============================================================================
-version: '3.8'
-
-services:
-  api:
-    build: .
-    ports:
-      - "8000:8000"
-    environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-    volumes:
-      - ./chroma_db:/app/chroma_db
-      - ./reports:/app/reports
-    restart: unless-stopped
-
-  # Optional: Add PostgreSQL for production
-  db:
-    image: postgres:15
-    environment:
-      POSTGRES_DB: compliance_scraper
-      POSTGRES_USER: scraper
-      POSTGRES_PASSWORD: ${DB_PASSWORD}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-
-volumes:
-  postgres_data:
-
-# ============================================================================
-# .gitignore
-# ============================================================================
-# Environment
-.env
-.env.local
-*.pyc
-__pycache__/
-
-# Vector DB
-chroma_db/
-*.db
-
-# Reports
-reports/
-*.pdf
-
-# IDE
-.vscode/
-.idea/
-*.swp
-
-# Dependencies
-venv/
-env/
-
-# OS
-.DS_Store
-Thumbs.db
-
-# ============================================================================
-# README.md
-# ============================================================================
+# Final startup command
+# Initializes database then starts the server
+CMD ["sh", "-c", "python setup_database.py init && uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+===================================
