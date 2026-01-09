@@ -1,0 +1,195 @@
+# ============================================================================
+# TIER 1: DASHBOARD ONLY (.env.dashboard)
+# ============================================================================
+# Use this configuration to deploy ONLY the compliance dashboard
+# No ASSURE-CODE integration - standalone product
+# ============================================================================
+
+# Database
+DATABASE_URL=postgresql+asyncpg://user:password@localhost:5432/compliance_dashboard
+
+# AI Service (for RAG analysis)
+OPENAI_API_KEY=sk-your-openai-key-here
+
+# Application
+ENVIRONMENT=production
+LOG_LEVEL=INFO
+
+# ASSURE-CODE Integration (DISABLED for Tier 1)
+ASSURE_CODE_ENABLED=false
+# ASSURE_CODE_API_URL=  # Not needed
+# ASSURE_CODE_API_KEY=  # Not needed
+
+# Features
+ENABLE_PDF_EXPORT=true
+ENABLE_EMAIL_ALERTS=true
+MAX_JOBS_PER_DAY=100
+
+# ============================================================================
+# TIER 2: ASSURE-CODE ONLY (.env.assure-code)
+# ============================================================================
+# Your existing ASSURE-CODE platform configuration
+# No scraper integration - manual compliance input
+# ============================================================================
+
+# Database
+DATABASE_URL=postgresql://user:password@localhost:5432/assure_code
+
+# AI Service
+LOVABLE_API_KEY=your-lovable-api-key
+
+# Payment
+STRIPE_SECRET_KEY=sk_live_your-stripe-key
+
+# Replit Auth
+REPLIT_AUTH_ENABLED=true
+
+# Compliance Scraper Integration (DISABLED for Tier 2)
+# COMPLIANCE_SCRAPER_WEBHOOK_URL=  # Not needed
+# COMPLIANCE_SCRAPER_API_KEY=  # Not needed
+
+# ============================================================================
+# TIER 3: COMPLETE AUTOMATION (.env.complete)
+# ============================================================================
+# Full integration between scraper and ASSURE-CODE
+# Automated end-to-end compliance pipeline
+# ============================================================================
+
+# ---------- SCRAPER CONFIGURATION ----------
+
+# Database
+DATABASE_URL=postgresql+asyncpg://user:password@localhost:5432/compliance_scraper
+
+# AI Service
+OPENAI_API_KEY=sk-your-openai-key-here
+
+# Application
+ENVIRONMENT=production
+LOG_LEVEL=INFO
+
+# ASSURE-CODE Integration (ENABLED)
+ASSURE_CODE_ENABLED=true
+ASSURE_CODE_AUTO_SEND=true
+ASSURE_CODE_API_URL=https://your-assure-code.replit.app
+ASSURE_CODE_API_KEY=your-shared-api-key-12345
+
+# Features
+ENABLE_PDF_EXPORT=true
+ENABLE_EMAIL_ALERTS=true
+MAX_JOBS_PER_DAY=1000
+
+# ---------- ASSURE-CODE CONFIGURATION ----------
+
+# (Keep your existing ASSURE-CODE env vars, plus add these:)
+
+# Compliance Scraper Integration (ENABLED)
+COMPLIANCE_SCRAPER_WEBHOOK_URL=https://your-scraper.com/api/v1/integration/webhook/specification-updated
+COMPLIANCE_SCRAPER_API_KEY=your-shared-api-key-12345
+
+# Auto-processing
+AUTO_PROCESS_REGULATORY_EVENTS=true
+
+# ============================================================================
+# OPTIONAL: KAFKA CONFIGURATION (High Volume Only)
+# ============================================================================
+# Only needed if processing 1000+ regulations/day
+# Otherwise, REST API integration is sufficient
+# ============================================================================
+
+# Kafka (Optional - for Tier 3 at scale)
+KAFKA_ENABLED=false
+KAFKA_BOOTSTRAP_SERVERS=localhost:9092
+KAFKA_REGULATORY_EVENTS_TOPIC=regulatory-events
+KAFKA_SPEC_UPDATES_TOPIC=specification-updates
+
+# ============================================================================
+# DEPLOYMENT COMMANDS
+# ============================================================================
+
+# TIER 1 (Dashboard Only):
+# 1. Copy .env.dashboard to .env
+# 2. python setup_database.py init
+# 3. uvicorn main:app --host 0.0.0.0 --port 8000
+# 4. Access dashboard at http://localhost:8000
+
+# TIER 2 (ASSURE-CODE Only):
+# 1. Use your existing ASSURE-CODE deployment
+# 2. No changes needed
+
+# TIER 3 (Complete):
+# 1. Deploy scraper with .env.complete (scraper section)
+# 2. Update ASSURE-CODE with .env.complete (ASSURE-CODE section)
+# 3. Both systems communicate via REST API
+# 4. Test with: POST /api/v1/assure-code/send/{job_id}
+
+# ============================================================================
+# QUICK START EXAMPLES
+# ============================================================================
+
+# Example 1: Start with Dashboard (Lowest Risk)
+cp .env.dashboard .env
+python setup_database.py init
+uvicorn main:app --reload
+# ✅ You now have: Compliance monitoring + PDF exports
+# ❌ You don't have: Auto-spec generation
+
+# Example 2: Add ASSURE-CODE Later
+# When customer wants spec generation:
+# 1. They sign up for ASSURE-CODE separately
+# 2. You enable integration: ASSURE_CODE_ENABLED=true
+# 3. Set API keys to match both systems
+# 4. Now scraper sends events to ASSURE-CODE
+
+# Example 3: Enterprise Customer (Full Automation)
+# 1. Deploy both systems from day 1
+# 2. Use .env.complete configuration
+# 3. Enable auto-send: ASSURE_CODE_AUTO_SEND=true
+# 4. Complete automation works immediately
+
+# ============================================================================
+# SECURITY NOTES
+# ============================================================================
+
+# API Key Generation:
+# Generate secure random API key for integration:
+# python -c "import secrets; print(f'rcp_{secrets.token_urlsafe(32)}')"
+
+# Important:
+# - Use DIFFERENT API keys for each customer
+# - Rotate keys every 90 days
+# - Never commit .env files to git
+# - Use environment secrets in production (Railway, Replit, etc.)
+
+# ============================================================================
+# PRODUCTION DEPLOYMENT URLs
+# ============================================================================
+
+# Tier 1 Dashboard:
+# - https://dashboard.compliance-platform.com
+# - API: https://api.compliance-platform.com
+
+# Tier 2 ASSURE-CODE:
+# - https://assure-code.com (your existing platform)
+
+# Tier 3 Complete:
+# - Dashboard: https://dashboard.compliance-platform.com
+# - ASSURE-CODE: https://assure-code.com
+# - Integration: Automatic via REST API
+
+# ============================================================================
+# MONITORING & HEALTH CHECKS
+# ============================================================================
+
+# Health check endpoints:
+# Scraper: GET http://localhost:8000/health
+# ASSURE-CODE: GET http://your-assure-code.com/api/health
+
+# Integration check:
+# GET http://localhost:8000/api/v1/assure-code/status
+
+# Expected response when integration is working:
+# {
+#   "enabled": true,
+#   "api_url": "https://assure-code.com",
+#   "mode": "rest-only"
+# }

@@ -1,0 +1,529 @@
+import React, { useState, useEffect } from 'react';
+import { FileText, Download, Search, Filter, Calendar, Building2, AlertCircle, CheckCircle2, Clock, TrendingUp, BarChart3, FileDown, Mail, Settings, Users } from 'lucide-react';
+
+const ComplianceDashboard = () => {
+  const [activeView, setActiveView] = useState('dashboard');
+  const [regulations, setRegulations] = useState([]);
+  const [selectedRegulation, setSelectedRegulation] = useState(null);
+  const [filters, setFilters] = useState({
+    jurisdiction: 'all',
+    category: 'all',
+    dateRange: '30days'
+  });
+
+  // Simulated data - replace with API calls
+  useEffect(() => {
+    const mockRegulations = [
+      {
+        id: 'reg_001',
+        title: 'SEC Digital Asset Reporting Requirements 2024',
+        jurisdiction: 'US',
+        category: 'Finance',
+        effectiveDate: '2026-06-01',
+        scrapedAt: '2026-01-08T10:30:00Z',
+        status: 'analyzed',
+        frameworks: ['SEC', 'SOC2', 'PCI-DSS'],
+        summary: 'New requirements for financial institutions to report digital asset transactions quarterly with enhanced security measures.',
+        keyRequirements: [
+          'Implement multi-factor authentication for all customer accounts',
+          'Encrypt all customer data at rest using AES-256 or stronger',
+          'Maintain audit logs for minimum of 7 years',
+          'Conduct annual third-party security audits',
+          'Submit quarterly digital asset transaction reports to SEC'
+        ],
+        deadlines: [
+          { date: '2026-03-01', description: 'Phase 1: MFA implementation deadline' },
+          { date: '2026-06-01', description: 'Full compliance deadline' }
+        ],
+        affectedEntities: ['Broker-dealers', 'Investment advisers', 'FinTech platforms', 'Cryptocurrency exchanges'],
+        penalties: 'Fines up to $500,000 per violation, potential license suspension',
+        sourceUrl: 'https://www.sec.gov/rules/final/2024/digital-assets.html',
+        confidence: 0.92
+      },
+      {
+        id: 'reg_002',
+        title: 'EU GDPR Amendment - AI Data Processing',
+        jurisdiction: 'EU',
+        category: 'Privacy',
+        effectiveDate: '2026-09-01',
+        scrapedAt: '2026-01-07T14:20:00Z',
+        status: 'analyzed',
+        frameworks: ['GDPR', 'ISO27001'],
+        summary: 'Updates to GDPR specifically addressing AI model training and automated decision-making using personal data.',
+        keyRequirements: [
+          'Obtain explicit consent for AI training on personal data',
+          'Implement right to explanation for AI decisions',
+          'Conduct Data Protection Impact Assessments for AI systems',
+          'Provide opt-out mechanisms for automated decision-making'
+        ],
+        deadlines: [
+          { date: '2026-09-01', description: 'Compliance deadline for new AI systems' }
+        ],
+        affectedEntities: ['AI companies', 'SaaS providers', 'Data processors'],
+        penalties: 'Up to €20 million or 4% of global annual turnover',
+        sourceUrl: 'https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=example',
+        confidence: 0.88
+      },
+      {
+        id: 'reg_003',
+        title: 'HIPAA Cybersecurity Updates 2026',
+        jurisdiction: 'US',
+        category: 'Healthcare',
+        effectiveDate: '2026-04-15',
+        scrapedAt: '2026-01-06T09:15:00Z',
+        status: 'analyzed',
+        frameworks: ['HIPAA', 'SOC2', 'NIST'],
+        summary: 'Enhanced cybersecurity requirements for healthcare providers handling electronic protected health information (ePHI).',
+        keyRequirements: [
+          'Implement zero-trust network architecture',
+          'Enable encryption for all ePHI in transit and at rest',
+          'Conduct vulnerability assessments quarterly',
+          'Implement multi-factor authentication for all system access'
+        ],
+        deadlines: [
+          { date: '2026-04-15', description: 'Full implementation deadline' }
+        ],
+        affectedEntities: ['Healthcare providers', 'Health insurers', 'Healthcare clearinghouses', 'Business associates'],
+        penalties: 'Civil penalties up to $1.5 million per violation category per year',
+        sourceUrl: 'https://www.hhs.gov/hipaa/for-professionals/security/guidance/example.html',
+        confidence: 0.95
+      }
+    ];
+    setRegulations(mockRegulations);
+  }, []);
+
+  const filteredRegulations = regulations.filter(reg => {
+    if (filters.jurisdiction !== 'all' && reg.jurisdiction !== filters.jurisdiction) return false;
+    if (filters.category !== 'all' && reg.category !== filters.category) return false;
+    return true;
+  });
+
+  const generatePDF = (regulation) => {
+    // In production, this would call the backend API
+    const pdfContent = `
+COMPLIANCE REPORT
+${regulation.title}
+
+Generated: ${new Date().toLocaleString()}
+Report ID: ${regulation.id}
+
+═══════════════════════════════════════════════════════════════
+
+REGULATION SUMMARY
+═══════════════════════════════════════════════════════════════
+
+Jurisdiction: ${regulation.jurisdiction}
+Category: ${regulation.category}
+Effective Date: ${regulation.effectiveDate}
+Source: ${regulation.sourceUrl}
+
+Compliance Frameworks:
+${regulation.frameworks.map(f => `• ${f}`).join('\n')}
+
+Summary:
+${regulation.summary}
+
+═══════════════════════════════════════════════════════════════
+
+KEY REQUIREMENTS
+═══════════════════════════════════════════════════════════════
+
+${regulation.keyRequirements.map((req, i) => `${i + 1}. ${req}`).join('\n\n')}
+
+═══════════════════════════════════════════════════════════════
+
+COMPLIANCE DEADLINES
+═══════════════════════════════════════════════════════════════
+
+${regulation.deadlines.map(d => `📅 ${d.date}\n   ${d.description}`).join('\n\n')}
+
+═══════════════════════════════════════════════════════════════
+
+AFFECTED ENTITIES
+═══════════════════════════════════════════════════════════════
+
+${regulation.affectedEntities.map(e => `• ${e}`).join('\n')}
+
+═══════════════════════════════════════════════════════════════
+
+PENALTIES FOR NON-COMPLIANCE
+═══════════════════════════════════════════════════════════════
+
+${regulation.penalties}
+
+═══════════════════════════════════════════════════════════════
+
+METADATA
+═══════════════════════════════════════════════════════════════
+
+Scraped: ${new Date(regulation.scrapedAt).toLocaleString()}
+Analysis Confidence: ${(regulation.confidence * 100).toFixed(0)}%
+
+This report was generated by the Compliance Monitoring Platform.
+For questions or verification, refer to the source URL above.
+`;
+
+    const blob = new Blob([pdfContent], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `compliance_report_${regulation.id}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const exportAllPDF = () => {
+    filteredRegulations.forEach(reg => {
+      setTimeout(() => generatePDF(reg), 100);
+    });
+  };
+
+  const DashboardView = () => {
+    const stats = {
+      total: regulations.length,
+      thisMonth: regulations.filter(r => {
+        const scraped = new Date(r.scrapedAt);
+        const monthAgo = new Date();
+        monthAgo.setMonth(monthAgo.getMonth() - 1);
+        return scraped > monthAgo;
+      }).length,
+      highPriority: regulations.filter(r => {
+        const effective = new Date(r.effectiveDate);
+        const threeMonthsFromNow = new Date();
+        threeMonthsFromNow.setMonth(threeMonthsFromNow.getMonth() + 3);
+        return effective < threeMonthsFromNow;
+      }).length,
+      frameworks: [...new Set(regulations.flatMap(r => r.frameworks))].length
+    };
+
+    return (
+      <div className="space-y-6">
+        {/* Stats Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg p-6 text-white">
+            <div className="flex items-center justify-between mb-2">
+              <FileText className="w-8 h-8 opacity-80" />
+              <TrendingUp className="w-5 h-5" />
+            </div>
+            <div className="text-3xl font-bold mb-1">{stats.total}</div>
+            <div className="text-blue-100 text-sm">Total Regulations</div>
+          </div>
+
+          <div className="bg-gradient-to-br from-green-500 to-green-600 rounded-lg p-6 text-white">
+            <div className="flex items-center justify-between mb-2">
+              <Calendar className="w-8 h-8 opacity-80" />
+              <CheckCircle2 className="w-5 h-5" />
+            </div>
+            <div className="text-3xl font-bold mb-1">{stats.thisMonth}</div>
+            <div className="text-green-100 text-sm">New This Month</div>
+          </div>
+
+          <div className="bg-gradient-to-br from-orange-500 to-orange-600 rounded-lg p-6 text-white">
+            <div className="flex items-center justify-between mb-2">
+              <AlertCircle className="w-8 h-8 opacity-80" />
+              <Clock className="w-5 h-5" />
+            </div>
+            <div className="text-3xl font-bold mb-1">{stats.highPriority}</div>
+            <div className="text-orange-100 text-sm">Upcoming Deadlines</div>
+          </div>
+
+          <div className="bg-gradient-to-br from-purple-500 to-purple-600 rounded-lg p-6 text-white">
+            <div className="flex items-center justify-between mb-2">
+              <BarChart3 className="w-8 h-8 opacity-80" />
+              <Building2 className="w-5 h-5" />
+            </div>
+            <div className="text-3xl font-bold mb-1">{stats.frameworks}</div>
+            <div className="text-purple-100 text-sm">Frameworks Tracked</div>
+          </div>
+        </div>
+
+        {/* Filters */}
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+          <div className="flex items-center gap-4">
+            <Filter className="w-5 h-5 text-gray-400" />
+            <select
+              value={filters.jurisdiction}
+              onChange={(e) => setFilters({...filters, jurisdiction: e.target.value})}
+              className="px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="all">All Jurisdictions</option>
+              <option value="US">United States</option>
+              <option value="EU">European Union</option>
+              <option value="UK">United Kingdom</option>
+              <option value="CA">Canada</option>
+            </select>
+
+            <select
+              value={filters.category}
+              onChange={(e) => setFilters({...filters, category: e.target.value})}
+              className="px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="all">All Categories</option>
+              <option value="Finance">Finance</option>
+              <option value="Healthcare">Healthcare</option>
+              <option value="Privacy">Privacy</option>
+              <option value="Security">Security</option>
+            </select>
+
+            <div className="flex-1"></div>
+
+            <button
+              onClick={exportAllPDF}
+              className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 flex items-center gap-2"
+            >
+              <FileDown className="w-4 h-4" />
+              Export All ({filteredRegulations.length})
+            </button>
+          </div>
+        </div>
+
+        {/* Regulations List */}
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+          <div className="p-4 border-b border-gray-200">
+            <h2 className="text-lg font-semibold">Recent Regulations</h2>
+          </div>
+          
+          <div className="divide-y divide-gray-200">
+            {filteredRegulations.map(reg => (
+              <div key={reg.id} className="p-6 hover:bg-gray-50 transition-colors">
+                <div className="flex items-start justify-between mb-3">
+                  <div className="flex-1">
+                    <h3 className="text-lg font-semibold text-gray-900 mb-2">
+                      {reg.title}
+                    </h3>
+                    <div className="flex items-center gap-4 text-sm text-gray-600 mb-3">
+                      <span className="flex items-center gap-1">
+                        <Building2 className="w-4 h-4" />
+                        {reg.jurisdiction}
+                      </span>
+                      <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded text-xs font-medium">
+                        {reg.category}
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <Calendar className="w-4 h-4" />
+                        Effective: {new Date(reg.effectiveDate).toLocaleDateString()}
+                      </span>
+                    </div>
+                    <p className="text-gray-700 mb-3">{reg.summary}</p>
+                    
+                    <div className="flex flex-wrap gap-2 mb-3">
+                      {reg.frameworks.map(framework => (
+                        <span key={framework} className="px-2 py-1 bg-gray-100 text-gray-700 rounded text-xs">
+                          {framework}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                  
+                  <div className="flex gap-2 ml-4">
+                    <button
+                      onClick={() => setSelectedRegulation(reg)}
+                      className="px-3 py-2 bg-white border border-gray-300 rounded-md hover:bg-gray-50 text-sm flex items-center gap-2"
+                    >
+                      <Search className="w-4 h-4" />
+                      View
+                    </button>
+                    <button
+                      onClick={() => generatePDF(reg)}
+                      className="px-3 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm flex items-center gap-2"
+                    >
+                      <Download className="w-4 h-4" />
+                      PDF
+                    </button>
+                  </div>
+                </div>
+
+                {/* Quick View Info */}
+                <div className="grid grid-cols-3 gap-4 mt-4 pt-4 border-t border-gray-200">
+                  <div>
+                    <div className="text-xs text-gray-500 mb-1">Key Requirements</div>
+                    <div className="text-sm font-medium">{reg.keyRequirements.length} identified</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500 mb-1">Deadlines</div>
+                    <div className="text-sm font-medium">{reg.deadlines.length} upcoming</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500 mb-1">Confidence</div>
+                    <div className="text-sm font-medium">{(reg.confidence * 100).toFixed(0)}%</div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const DetailView = ({ regulation }) => {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <button
+            onClick={() => setSelectedRegulation(null)}
+            className="text-blue-600 hover:text-blue-700 flex items-center gap-2"
+          >
+            ← Back to Dashboard
+          </button>
+          <button
+            onClick={() => generatePDF(regulation)}
+            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 flex items-center gap-2"
+          >
+            <Download className="w-4 h-4" />
+            Download PDF
+          </button>
+        </div>
+
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+          <h1 className="text-2xl font-bold text-gray-900 mb-4">{regulation.title}</h1>
+          
+          <div className="grid grid-cols-2 gap-4 mb-6 p-4 bg-gray-50 rounded-lg">
+            <div>
+              <div className="text-sm text-gray-600 mb-1">Jurisdiction</div>
+              <div className="font-medium">{regulation.jurisdiction}</div>
+            </div>
+            <div>
+              <div className="text-sm text-gray-600 mb-1">Category</div>
+              <div className="font-medium">{regulation.category}</div>
+            </div>
+            <div>
+              <div className="text-sm text-gray-600 mb-1">Effective Date</div>
+              <div className="font-medium">{new Date(regulation.effectiveDate).toLocaleDateString()}</div>
+            </div>
+            <div>
+              <div className="text-sm text-gray-600 mb-1">Analysis Confidence</div>
+              <div className="font-medium">{(regulation.confidence * 100).toFixed(0)}%</div>
+            </div>
+          </div>
+
+          <div className="mb-6">
+            <h2 className="text-lg font-semibold mb-3">Compliance Frameworks</h2>
+            <div className="flex flex-wrap gap-2">
+              {regulation.frameworks.map(framework => (
+                <span key={framework} className="px-3 py-1 bg-blue-100 text-blue-800 rounded-lg font-medium">
+                  {framework}
+                </span>
+              ))}
+            </div>
+          </div>
+
+          <div className="mb-6">
+            <h2 className="text-lg font-semibold mb-3">Summary</h2>
+            <p className="text-gray-700">{regulation.summary}</p>
+          </div>
+
+          <div className="mb-6">
+            <h2 className="text-lg font-semibold mb-3">Key Requirements</h2>
+            <ul className="space-y-3">
+              {regulation.keyRequirements.map((req, i) => (
+                <li key={i} className="flex items-start gap-3 p-3 bg-gray-50 rounded-lg">
+                  <CheckCircle2 className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
+                  <span className="text-gray-700">{req}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <div className="mb-6">
+            <h2 className="text-lg font-semibold mb-3">Compliance Deadlines</h2>
+            <div className="space-y-3">
+              {regulation.deadlines.map((deadline, i) => (
+                <div key={i} className="flex items-start gap-3 p-4 border-l-4 border-orange-500 bg-orange-50 rounded">
+                  <Calendar className="w-5 h-5 text-orange-600 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <div className="font-semibold text-orange-900">{deadline.date}</div>
+                    <div className="text-gray-700 mt-1">{deadline.description}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="mb-6">
+            <h2 className="text-lg font-semibold mb-3">Affected Entities</h2>
+            <div className="grid grid-cols-2 gap-2">
+              {regulation.affectedEntities.map((entity, i) => (
+                <div key={i} className="flex items-center gap-2 p-2 bg-gray-50 rounded">
+                  <Users className="w-4 h-4 text-gray-600" />
+                  <span className="text-gray-700">{entity}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="mb-6">
+            <h2 className="text-lg font-semibold mb-3">Penalties for Non-Compliance</h2>
+            <div className="p-4 bg-red-50 border-l-4 border-red-500 rounded">
+              <AlertCircle className="w-5 h-5 text-red-600 mb-2" />
+              <p className="text-gray-700">{regulation.penalties}</p>
+            </div>
+          </div>
+
+          <div className="p-4 bg-gray-50 rounded-lg">
+            <h2 className="text-sm font-semibold mb-2 text-gray-600">Source</h2>
+            <a
+              href={regulation.sourceUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-600 hover:text-blue-700 break-all"
+            >
+              {regulation.sourceUrl}
+            </a>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      {/* Header */}
+      <div className="bg-white border-b border-gray-200 shadow-sm">
+        <div className="max-w-7xl mx-auto px-4 py-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-blue-700 rounded-lg flex items-center justify-center">
+                <FileText className="w-6 h-6 text-white" />
+              </div>
+              <div>
+                <h1 className="text-xl font-bold text-gray-900">Compliance Dashboard</h1>
+                <p className="text-sm text-gray-600">Regulatory Intelligence & Monitoring</p>
+              </div>
+            </div>
+            
+            <div className="flex items-center gap-3">
+              <div className="text-right mr-4">
+                <div className="text-sm text-gray-600">Last Updated</div>
+                <div className="text-sm font-medium">{new Date().toLocaleDateString()}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Main Content */}
+      <div className="max-w-7xl mx-auto px-4 py-6">
+        {selectedRegulation ? (
+          <DetailView regulation={selectedRegulation} />
+        ) : (
+          <DashboardView />
+        )}
+      </div>
+
+      {/* Footer */}
+      <div className="max-w-7xl mx-auto px-4 py-4 mt-8">
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 flex items-start gap-3">
+          <AlertCircle className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
+          <div className="text-sm text-blue-900">
+            <strong>AI-Powered Analysis:</strong> All regulations are analyzed using advanced RAG (Retrieval-Augmented Generation) 
+            to extract requirements, deadlines, and compliance frameworks. Download PDFs for detailed reports or integrate with 
+            ASSURE-CODE for automated specification updates.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default ComplianceDashboard;

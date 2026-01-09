@@ -1,0 +1,415 @@
+// server/routes/complianceScraperWebhook.ts
+// Add this to your ASSURE-CODE platform to send updates back to the scraper
+
+import { Router } from 'express';
+import { db } from '../db';
+import { specifications, regulatoryEvents, affectedSpecifications } from '@shared/schema';
+import { eq } from 'drizzle-orm';
+
+const router = Router();
+
+/**
+ * Configuration for sending updates back to Compliance Scraper
+ */
+const COMPLIANCE_SCRAPER_WEBHOOK_URL = process.env.COMPLIANCE_SCRAPER_WEBHOOK_URL || 
+  'http://localhost:8000/api/v1/integration/webhook/specification-updated';
+
+const COMPLIANCE_SCRAPER_API_KEY = process.env.COMPLIANCE_SCRAPER_API_KEY;
+
+/**
+ * Send specification update notification to Compliance Scraper
+ */
+async function notifyComplianceScraper(specUpdate: {
+  specificationId: string;
+  workspaceId: string;
+  version: number;
+  changeReason: string;
+  regulatoryEventId: string;
+  githubPrUrl?: string;
+}) {
+  try {
+    const response = await fetch(COMPLIANCE_SCRAPER_WEBHOOK_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${COMPLIANCE_SCRAPER_API_KEY}`
+      },
+      body: JSON.stringify({
+        specification_id: specUpdate.specificationId,
+        workspace_id: specUpdate.workspaceId,
+        version: specUpdate.version,
+        change_reason: specUpdate.changeReason,
+        regulatory_event_id: specUpdate.regulatoryEventId,
+        updated_at: new Date().toISOString(),
+        github_pr_url: specUpdate.githubPrUrl
+      })
+    });
+
+    if (!response.ok) {
+      console.error('Failed to notify Compliance Scraper:', await response.text());
+    } else {
+      console.log('✅ Notified Compliance Scraper of spec update:', specUpdate.specificationId);
+    }
+  } catch (error) {
+    console.error('Error notifying Compliance Scraper:', error);
+  }
+}
+
+/**
+ * POST /api/compliance-scraper/regulatory-event
+ * 
+ * Receives regulatory events from Compliance Scraper
+ * This is called when the scraper detects and analyzes a new regulation
+ */
+router.post('/regulatory-event', async (req, res) => {
+  try {
+    const event = req.body;
+
+    // Validate required fields
+    if (!event.event_id || !event.title || !event.jurisdiction) {
+      return res.status(400).json({ 
+        error: 'Missing required fields',
+        required: ['event_id', 'title', 'jurisdiction']
+      });
+    }
+
+    console.log('📥 Received regulatory event from Compliance Scraper:', event.event_id);
+
+    // Store the regulatory event in your database
+    const [insertedEvent] = await db.insert(regulatoryEvents).values({
+      id: event.event_id,
+      eventType: event.event_type,
+      title: event.title,
+      jurisdiction: event.jurisdiction,
+      category: event.category,
+      effectiveDate: event.effective_date ? new Date(event.effective_date) : null,
+      sourceUrl: event.source_url,
+      summary: event.summary,
+      keyRequirements: event.key_requirements,
+      affectedEntities: event.affected_entities,
+      complianceDeadlines: event.compliance_deadlines,
+      penalties: event.penalties,
+      complianceFrameworks: event.compliance_frameworks,
+      fullText: event.full_text,
+      scrapedAt: new Date(event.scraped_at),
+      scrapeJobId: event.scrape_job_id,
+      analysisConfidence: event.analysis_confidence,
+      status: 'pending',
+      processedAt: null
+    }).returning();
+
+    console.log('✅ Stored regulatory event:', insertedEvent.id);
+
+    // Trigger async processing to find affected specs
+    // This would be handled by your existing regulatory event processing logic
+    setTimeout(() => {
+      processRegulatoryEvent(insertedEvent.id);
+    }, 100);
+
+    res.json({
+      success: true,
+      event_id: insertedEvent.id,
+      status: 'received',
+      message: 'Regulatory event received and queued for processing'
+    });
+
+  } catch (error) {
+    console.error('Error processing regulatory event:', error);
+    res.status(500).json({ 
+      error: 'Failed to process regulatory event',
+      details: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
+/**
+ * Process regulatory event and identify affected specifications
+ * This function would integrate with your existing AI-powered analysis
+ */
+async function processRegulatoryEvent(eventId: string) {
+  try {
+    console.log('🔍 Processing regulatory event:', eventId);
+
+    // Get the event
+    const event = await db.query.regulatoryEvents.findFirst({
+      where: eq(regulatoryEvents.id, eventId)
+    });
+
+    if (!event) {
+      console.error('Event not found:', eventId);
+      return;
+    }
+
+    // TODO: Integrate with your existing specification analysis logic
+    // This is where you would:
+    // 1. Use AI to find affected workspaces (by category, compliance frameworks)
+    // 2. Search specifications using RAG/semantic search
+    // 3. Identify which modules need updates
+    
+    // Example: Find workspaces by category
+    const affectedWorkspaces = await findAffectedWorkspaces(
+      event.category,
+      event.complianceFrameworks
+    );
+
+    for (const workspace of affectedWorkspaces) {
+      // Find specifications in this workspace
+      const affectedSpecs = await findAffectedSpecifications(
+        workspace.id,
+        event.fullText,
+        event.complianceFrameworks
+      );
+
+      for (const spec of affectedSpecs) {
+        // Create affected specification record
+        await db.insert(affectedSpecifications).values({
+          id: `affected_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          regulatoryEventId: eventId,
+          specificationId: spec.id,
+          impactAnalysis: `Requires update due to ${event.eventType}`,
+          status: 'pending',
+          analyzedAt: new Date()
+        });
+
+        // Trigger specification regeneration
+        await regenerateSpecification(spec.id, eventId);
+      }
+    }
+
+    // Mark event as processed
+    await db.update(regulatoryEvents)
+      .set({ 
+        status: 'processed',
+        processedAt: new Date()
+      })
+      .where(eq(regulatoryEvents.id, eventId));
+
+    console.log('✅ Regulatory event processed:', eventId);
+
+  } catch (error) {
+    console.error('Error processing regulatory event:', error);
+    
+    // Mark event as failed
+    await db.update(regulatoryEvents)
+      .set({ status: 'failed' })
+      .where(eq(regulatoryEvents.id, eventId));
+  }
+}
+
+/**
+ * Find workspaces that might be affected by this regulatory event
+ */
+async function findAffectedWorkspaces(
+  category: string,
+  complianceFrameworks: string[]
+): Promise<any[]> {
+  // TODO: Implement using your workspace query logic
+  // This is a placeholder - integrate with your actual workspace schema
+  
+  // Example: Query workspaces by tags or metadata
+  // SELECT * FROM workspaces 
+  // WHERE category = ? OR compliance_frameworks && ?
+  
+  return [];
+}
+
+/**
+ * Find specifications affected by the regulatory event
+ * Uses semantic search on the full text
+ */
+async function findAffectedSpecifications(
+  workspaceId: string,
+  regulationFullText: string,
+  complianceFrameworks: string[]
+): Promise<any[]> {
+  // TODO: Integrate with your RAG/semantic search
+  // This would use pgvector to find similar specifications
+  
+  // Example query using pgvector:
+  // SELECT * FROM specifications s
+  // JOIN document_chunks c ON c.specification_id = s.id
+  // WHERE s.workspace_id = ?
+  // ORDER BY c.embedding <-> get_embedding(?)
+  // LIMIT 10
+  
+  return [];
+}
+
+/**
+ * Regenerate a specification with updated regulatory requirements
+ */
+async function regenerateSpecification(
+  specificationId: string,
+  regulatoryEventId: string
+) {
+  try {
+    console.log('🔄 Regenerating specification:', specificationId);
+
+    // Get current specification
+    const currentSpec = await db.query.specifications.findFirst({
+      where: eq(specifications.id, specificationId)
+    });
+
+    if (!currentSpec) {
+      console.error('Specification not found:', specificationId);
+      return;
+    }
+
+    // TODO: Integrate with your AI specification generation logic
+    // This would call your existing generateSpecification function
+    // passing in the regulatory event requirements
+    
+    // Create new version
+    const newVersion = currentSpec.version + 1;
+    
+    // Generate updated specification content
+    // const updatedContent = await generateSpecificationWithRegulation(
+    //   currentSpec,
+    //   regulatoryEventId
+    // );
+
+    // For now, create a new version record
+    const [newSpec] = await db.insert(specifications).values({
+      id: `spec_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      workspaceId: currentSpec.workspaceId,
+      name: currentSpec.name,
+      description: currentSpec.description,
+      content: currentSpec.content, // Would be updated content
+      version: newVersion,
+      previousVersionId: specificationId,
+      changeReason: `Updated per regulatory event ${regulatoryEventId}`,
+      regulatoryEventId: regulatoryEventId,
+      complianceAnnotations: {
+        regulatory_event: regulatoryEventId,
+        updated_at: new Date().toISOString()
+      },
+      createdAt: new Date(),
+      updatedAt: new Date()
+    }).returning();
+
+    console.log('✅ Specification regenerated:', newSpec.id, `v${newVersion}`);
+
+    // Trigger GitHub PR creation (your existing logic)
+    const githubPrUrl = await createGitHubPR(newSpec);
+
+    // Notify Compliance Scraper
+    await notifyComplianceScraper({
+      specificationId: newSpec.id,
+      workspaceId: newSpec.workspaceId,
+      version: newVersion,
+      changeReason: `Updated per regulatory event ${regulatoryEventId}`,
+      regulatoryEventId: regulatoryEventId,
+      githubPrUrl: githubPrUrl
+    });
+
+  } catch (error) {
+    console.error('Error regenerating specification:', error);
+  }
+}
+
+/**
+ * Create GitHub PR for specification update
+ * This would trigger your existing GitHub Actions workflow
+ */
+async function createGitHubPR(specification: any): Promise<string | undefined> {
+  // TODO: Integrate with your existing GitHub PR creation logic
+  // This would call your repository_dispatch or create PR directly
+  
+  console.log('📝 GitHub PR creation would trigger here for:', specification.id);
+  return undefined;
+}
+
+/**
+ * GET /api/compliance-scraper/regulatory-events/:eventId/affected-specs
+ * 
+ * Query endpoint for Compliance Scraper to check which specs were affected
+ */
+router.get('/regulatory-events/:eventId/affected-specs', async (req, res) => {
+  try {
+    const { eventId } = req.params;
+
+    // Get affected specifications
+    const affected = await db.query.affectedSpecifications.findMany({
+      where: eq(affectedSpecifications.regulatoryEventId, eventId),
+      with: {
+        specification: true
+      }
+    });
+
+    const specs = affected.map(a => ({
+      specification_id: a.specificationId,
+      title: a.specification?.name,
+      version: a.specification?.version,
+      status: a.status,
+      impact_analysis: a.impactAnalysis
+    }));
+
+    res.json({
+      event_id: eventId,
+      affected_specifications: specs,
+      count: specs.length
+    });
+
+  } catch (error) {
+    console.error('Error fetching affected specs:', error);
+    res.status(500).json({ error: 'Failed to fetch affected specifications' });
+  }
+});
+
+/**
+ * POST /api/compliance-scraper/regenerate
+ * 
+ * Manual trigger endpoint for specification regeneration
+ */
+router.post('/regenerate', async (req, res) => {
+  try {
+    const { workspace_id, specification_id, regulatory_event_id } = req.body;
+
+    if (!specification_id || !regulatory_event_id) {
+      return res.status(400).json({ 
+        error: 'Missing required fields',
+        required: ['specification_id', 'regulatory_event_id']
+      });
+    }
+
+    // Trigger regeneration
+    await regenerateSpecification(specification_id, regulatory_event_id);
+
+    res.json({
+      success: true,
+      message: 'Specification regeneration triggered'
+    });
+
+  } catch (error) {
+    console.error('Error triggering regeneration:', error);
+    res.status(500).json({ error: 'Failed to trigger regeneration' });
+  }
+});
+
+export default router;
+
+// ============================================================================
+// Add to your main server file (server/index.ts or similar)
+// ============================================================================
+
+/*
+
+import complianceScraperRouter from './routes/complianceScraperWebhook';
+
+app.use('/api/compliance-scraper', complianceScraperRouter);
+
+*/
+
+// ============================================================================
+// Environment Variables to Add
+// ============================================================================
+
+/*
+
+# .env for ASSURE-CODE
+
+# Compliance Scraper Integration
+COMPLIANCE_SCRAPER_WEBHOOK_URL=http://your-scraper-url:8000/api/v1/integration/webhook/specification-updated
+COMPLIANCE_SCRAPER_API_KEY=your-scraper-api-key
+
+*/

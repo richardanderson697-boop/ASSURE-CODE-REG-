@@ -1,0 +1,600 @@
+# assure_code_integration.py - Integration with ASSURE-CODE Platform
+
+"""
+This module handles the bidirectional integration between the Compliance Scraper
+and ASSURE-CODE platform for automated regulatory event processing.
+
+Integration Flow:
+1. Scraper detects new regulation → Analyzes with RAG
+2. Creates structured regulatory event
+3. Sends to ASSURE-CODE via Kafka/REST API
+4. ASSURE-CODE processes event → Regenerates affected specs
+5. Updates sent back via webhook for tracking
+
+Add to requirements.txt:
+aiokafka==0.10.0
+"""
+
+import os
+import json
+import asyncio
+from datetime import datetime
+from typing import Dict, List, Optional
+from dataclasses import dataclass, asdict
+
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+import httpx
+from aiokafka import AIOKafkaProducer, AIOKafkaConsumer
+
+from database import (
+    get_db, ScrapeJob, RegulationDocument, ComplianceAnalysis,
+    User, AuditLog
+)
+
+# ============================================================================
+# CONFIGURATION
+# ============================================================================
+
+ASSURE_CODE_API_URL = os.getenv("ASSURE_CODE_API_URL", "https://assure-code.replit.app")
+ASSURE_CODE_API_KEY = os.getenv("ASSURE_CODE_API_KEY")
+
+KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+KAFKA_REGULATORY_EVENTS_TOPIC = "regulatory-events"
+KAFKA_SPEC_UPDATES_TOPIC = "specification-updates"
+
+# ============================================================================
+# DATA MODELS
+# ============================================================================
+
+@dataclass
+class RegulatoryEvent:
+    """Structured regulatory event for ASSURE-CODE"""
+    event_id: str
+    event_type: str  # "new_regulation", "amendment", "clarification"
+    title: str
+    jurisdiction: str
+    category: str  # "finance", "healthcare", etc.
+    effective_date: Optional[str]
+    source_url: str
+    
+    # AI-extracted details
+    summary: str
+    key_requirements: List[str]
+    affected_entities: List[str]
+    compliance_deadlines: List[Dict[str, str]]
+    penalties: Optional[str]
+    
+    # Metadata
+    scraped_at: str
+    scrape_job_id: str
+    analysis_confidence: float  # 0.0-1.0
+    
+    # Compliance framework tags (auto-detected by RAG)
+    compliance_frameworks: List[str]  # ["GDPR", "HIPAA", "SOC2", etc.]
+    
+    # Full text for RAG embedding in ASSURE-CODE
+    full_text: str
+
+@dataclass
+class SpecificationUpdate:
+    """Notification from ASSURE-CODE about spec updates"""
+    specification_id: str
+    workspace_id: str
+    version: int
+    change_reason: str
+    regulatory_event_id: str
+    updated_at: str
+    github_pr_url: Optional[str]
+
+# ============================================================================
+# KAFKA PRODUCER/CONSUMER
+# ============================================================================
+
+class KafkaIntegration:
+    """Handles Kafka-based integration with ASSURE-CODE"""
+    
+    def __init__(self):
+        self.producer: Optional[AIOKafkaProducer] = None
+        self.consumer: Optional[AIOKafkaConsumer] = None
+        self.running = False
+    
+    async def start_producer(self):
+        """Initialize Kafka producer"""
+        self.producer = AIOKafkaProducer(
+            bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
+            value_serializer=lambda v: json.dumps(v).encode('utf-8')
+        )
+        await self.producer.start()
+        print("✅ Kafka producer started")
+    
+    async def stop_producer(self):
+        """Stop Kafka producer"""
+        if self.producer:
+            await self.producer.stop()
+            print("🛑 Kafka producer stopped")
+    
+    async def publish_regulatory_event(self, event: RegulatoryEvent):
+        """Publish regulatory event to Kafka"""
+        if not self.producer:
+            await self.start_producer()
+        
+        try:
+            await self.producer.send_and_wait(
+                KAFKA_REGULATORY_EVENTS_TOPIC,
+                value=asdict(event)
+            )
+            print(f"📤 Published regulatory event: {event.event_id}")
+        except Exception as e:
+            print(f"❌ Failed to publish event: {e}")
+            raise
+    
+    async def start_consumer(self, callback):
+        """Start consuming specification updates from ASSURE-CODE"""
+        self.consumer = AIOKafkaConsumer(
+            KAFKA_SPEC_UPDATES_TOPIC,
+            bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
+            value_deserializer=lambda m: json.loads(m.decode('utf-8')),
+            group_id='compliance-scraper-consumers'
+        )
+        
+        await self.consumer.start()
+        self.running = True
+        print("✅ Kafka consumer started")
+        
+        try:
+            async for msg in self.consumer:
+                if not self.running:
+                    break
+                
+                update = SpecificationUpdate(**msg.value)
+                await callback(update)
+        finally:
+            await self.consumer.stop()
+            print("🛑 Kafka consumer stopped")
+    
+    async def stop_consumer(self):
+        """Stop Kafka consumer"""
+        self.running = False
+
+# Global Kafka instance
+kafka = KafkaIntegration()
+
+# ============================================================================
+# REST API INTEGRATION
+# ============================================================================
+
+class AssureCodeClient:
+    """REST API client for ASSURE-CODE platform"""
+    
+    def __init__(self):
+        self.base_url = ASSURE_CODE_API_URL
+        self.api_key = ASSURE_CODE_API_KEY
+        self.client = httpx.AsyncClient(
+            timeout=30.0,
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json"
+            }
+        )
+    
+    async def create_regulatory_event(self, event: RegulatoryEvent) -> Dict:
+        """
+        Send regulatory event to ASSURE-CODE via REST API
+        Endpoint: POST /api/regulatory-events
+        """
+        try:
+            response = await self.client.post(
+                f"{self.base_url}/api/regulatory-events",
+                json=asdict(event)
+            )
+            response.raise_for_status()
+            return response.json()
+        
+        except httpx.HTTPError as e:
+            print(f"❌ Failed to create regulatory event: {e}")
+            raise HTTPException(500, f"ASSURE-CODE API error: {str(e)}")
+    
+    async def get_affected_specifications(self, event_id: str) -> List[Dict]:
+        """
+        Get list of specifications affected by a regulatory event
+        Endpoint: GET /api/regulatory-events/{event_id}/affected-specs
+        """
+        response = await self.client.get(
+            f"{self.base_url}/api/regulatory-events/{event_id}/affected-specs"
+        )
+        response.raise_for_status()
+        return response.json()
+    
+    async def trigger_specification_regeneration(
+        self,
+        workspace_id: str,
+        specification_id: str,
+        regulatory_event_id: str
+    ) -> Dict:
+        """
+        Trigger specification regeneration in ASSURE-CODE
+        Endpoint: POST /api/workspaces/{workspace_id}/specifications/{spec_id}/regenerate
+        """
+        response = await self.client.post(
+            f"{self.base_url}/api/workspaces/{workspace_id}/specifications/{specification_id}/regenerate",
+            json={"regulatory_event_id": regulatory_event_id}
+        )
+        response.raise_for_status()
+        return response.json()
+    
+    async def close(self):
+        """Close HTTP client"""
+        await self.client.aclose()
+
+# ============================================================================
+# REGULATORY EVENT PROCESSOR
+# ============================================================================
+
+class RegulatoryEventProcessor:
+    """Processes scraped regulations into ASSURE-CODE events"""
+    
+    async def process_scrape_job(
+        self,
+        db: AsyncSession,
+        job_id: str
+    ) -> Optional[RegulatoryEvent]:
+        """
+        Convert completed scrape job into regulatory event
+        """
+        # Get job and analysis
+        result = await db.execute(
+            select(ScrapeJob, ComplianceAnalysis)
+            .join(ComplianceAnalysis, ScrapeJob.id == ComplianceAnalysis.scrape_job_id)
+            .where(ScrapeJob.id == job_id)
+        )
+        row = result.first()
+        
+        if not row:
+            return None
+        
+        job, analysis = row
+        
+        # Get document
+        doc_result = await db.execute(
+            select(RegulationDocument).where(
+                RegulationDocument.scrape_job_id == job_id
+            ).limit(1)
+        )
+        document = doc_result.scalar_one_or_none()
+        
+        if not document:
+            return None
+        
+        # Extract structured data from analysis findings
+        findings = analysis.findings.get('findings', [])
+        
+        # Parse findings
+        key_requirements = []
+        affected_entities = []
+        compliance_deadlines = []
+        penalties = None
+        
+        for finding in findings:
+            question = finding.get('question', '').lower()
+            answer = finding.get('answer', '')
+            
+            if 'requirement' in question:
+                # Extract bullet points or numbered items
+                key_requirements.extend(self._extract_list_items(answer))
+            
+            elif 'deadline' in question or 'date' in question:
+                deadlines = self._extract_deadlines(answer)
+                compliance_deadlines.extend(deadlines)
+            
+            elif 'entities' in question or 'affected' in question:
+                affected_entities.extend(self._extract_list_items(answer))
+            
+            elif 'penalt' in question:
+                penalties = answer
+        
+        # Auto-detect compliance frameworks from text
+        frameworks = self._detect_compliance_frameworks(
+            document.raw_text,
+            job.category
+        )
+        
+        # Determine event type
+        event_type = self._determine_event_type(document.title)
+        
+        # Create regulatory event
+        event = RegulatoryEvent(
+            event_id=f"reg_event_{job_id}",
+            event_type=event_type,
+            title=document.title,
+            jurisdiction=job.jurisdiction,
+            category=job.category,
+            effective_date=document.effective_date.isoformat() if document.effective_date else None,
+            source_url=document.source_url,
+            summary=findings[0].get('answer', '')[:500] if findings else '',
+            key_requirements=key_requirements[:10],  # Top 10
+            affected_entities=list(set(affected_entities))[:5],  # Unique, top 5
+            compliance_deadlines=compliance_deadlines[:5],
+            penalties=penalties,
+            scraped_at=document.scraped_at.isoformat(),
+            scrape_job_id=job_id,
+            analysis_confidence=0.85,  # Could be calculated from LLM confidence
+            compliance_frameworks=frameworks,
+            full_text=document.raw_text[:50000]  # Limit for embedding
+        )
+        
+        return event
+    
+    def _extract_list_items(self, text: str) -> List[str]:
+        """Extract bullet points or numbered items from text"""
+        items = []
+        lines = text.split('\n')
+        
+        for line in lines:
+            line = line.strip()
+            # Match bullet points or numbered lists
+            if line.startswith(('-', '•', '*')) or (len(line) > 2 and line[0].isdigit() and line[1] in ('.', ')')):
+                # Remove prefix
+                cleaned = line.lstrip('-•*0123456789.) ').strip()
+                if cleaned:
+                    items.append(cleaned)
+        
+        return items
+    
+    def _extract_deadlines(self, text: str) -> List[Dict[str, str]]:
+        """Extract deadlines from text"""
+        # Simple implementation - could use NER for better extraction
+        deadlines = []
+        
+        # Look for common deadline patterns
+        import re
+        date_pattern = r'\b(\w+\s+\d{1,2},?\s+\d{4}|\d{1,2}/\d{1,2}/\d{4})\b'
+        dates = re.findall(date_pattern, text)
+        
+        for date in dates:
+            # Find context around date
+            idx = text.find(date)
+            context_start = max(0, idx - 100)
+            context_end = min(len(text), idx + 100)
+            context = text[context_start:context_end]
+            
+            deadlines.append({
+                'date': date,
+                'description': context.strip()
+            })
+        
+        return deadlines
+    
+    def _detect_compliance_frameworks(self, text: str, category: str) -> List[str]:
+        """Auto-detect applicable compliance frameworks"""
+        frameworks = []
+        
+        text_lower = text.lower()
+        
+        # Framework detection rules
+        framework_keywords = {
+            'GDPR': ['gdpr', 'general data protection', 'eu data protection'],
+            'HIPAA': ['hipaa', 'health insurance portability', 'phi', 'protected health information'],
+            'PCI-DSS': ['pci', 'payment card industry', 'card data', 'cardholder'],
+            'SOC2': ['soc 2', 'soc2', 'service organization control'],
+            'CCPA': ['ccpa', 'california consumer privacy', 'cpra'],
+            'ISO27001': ['iso 27001', 'iso27001', 'information security management'],
+            'NIST': ['nist', 'cybersecurity framework'],
+            'FINRA': ['finra', 'financial industry regulatory'],
+            'SEC': ['securities and exchange', 'sec rule'],
+        }
+        
+        for framework, keywords in framework_keywords.items():
+            if any(keyword in text_lower for keyword in keywords):
+                frameworks.append(framework)
+        
+        # Category-based auto-detection
+        if category == 'finance':
+            if 'SOC2' not in frameworks:
+                frameworks.append('SOC2')
+            if 'PCI-DSS' not in frameworks and ('payment' in text_lower or 'card' in text_lower):
+                frameworks.append('PCI-DSS')
+        
+        elif category == 'healthcare':
+            if 'HIPAA' not in frameworks:
+                frameworks.append('HIPAA')
+            if 'SOC2' not in frameworks:
+                frameworks.append('SOC2')
+        
+        # Always include GDPR for EU jurisdiction
+        if 'GDPR' not in frameworks and any(keyword in text_lower for keyword in ['data protection', 'personal data', 'privacy']):
+            frameworks.append('GDPR')
+        
+        return frameworks
+    
+    def _determine_event_type(self, title: str) -> str:
+        """Determine if this is a new regulation, amendment, or clarification"""
+        title_lower = title.lower()
+        
+        if any(word in title_lower for word in ['amendment', 'amend', 'revise', 'update', 'change']):
+            return 'amendment'
+        elif any(word in title_lower for word in ['clarification', 'guidance', 'interpretation', 'advisory']):
+            return 'clarification'
+        else:
+            return 'new_regulation'
+
+# ============================================================================
+# API ROUTES FOR ASSURE-CODE INTEGRATION
+# ============================================================================
+
+router = APIRouter(prefix="/api/v1/integration", tags=["Integration"])
+
+assure_code_client = AssureCodeClient()
+event_processor = RegulatoryEventProcessor()
+
+@router.post("/send-to-assure-code/{job_id}")
+async def send_job_to_assure_code(
+    job_id: str,
+    method: str = "rest",  # "rest" or "kafka"
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Send completed scrape job to ASSURE-CODE as a regulatory event
+    
+    Methods:
+    - rest: Direct REST API call (synchronous, more reliable)
+    - kafka: Kafka message (asynchronous, decoupled)
+    """
+    
+    # Process job into regulatory event
+    event = await event_processor.process_scrape_job(db, job_id)
+    
+    if not event:
+        raise HTTPException(404, "Job or analysis not found")
+    
+    if method == "kafka":
+        # Send via Kafka (asynchronous)
+        background_tasks.add_task(kafka.publish_regulatory_event, event)
+        return {
+            'status': 'queued',
+            'method': 'kafka',
+            'event_id': event.event_id,
+            'message': 'Event queued for Kafka delivery'
+        }
+    
+    else:
+        # Send via REST API (synchronous)
+        result = await assure_code_client.create_regulatory_event(event)
+        
+        return {
+            'status': 'sent',
+            'method': 'rest',
+            'event_id': event.event_id,
+            'assure_code_response': result
+        }
+
+@router.get("/assure-code/affected-specs/{event_id}")
+async def get_affected_specs(event_id: str):
+    """
+    Query ASSURE-CODE for specifications affected by this regulatory event
+    """
+    specs = await assure_code_client.get_affected_specifications(event_id)
+    return {'event_id': event_id, 'affected_specifications': specs}
+
+@router.post("/assure-code/trigger-regeneration")
+async def trigger_spec_regeneration(
+    workspace_id: str,
+    specification_id: str,
+    regulatory_event_id: str
+):
+    """
+    Manually trigger specification regeneration in ASSURE-CODE
+    """
+    result = await assure_code_client.trigger_specification_regeneration(
+        workspace_id, specification_id, regulatory_event_id
+    )
+    return result
+
+# ============================================================================
+# WEBHOOK ENDPOINT FOR ASSURE-CODE CALLBACKS
+# ============================================================================
+
+@router.post("/webhook/specification-updated")
+async def specification_updated_webhook(
+    update: SpecificationUpdate,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Webhook endpoint for ASSURE-CODE to notify about specification updates
+    
+    This endpoint receives notifications when ASSURE-CODE:
+    1. Regenerates a specification due to regulatory changes
+    2. Creates a GitHub PR for the changes
+    """
+    
+    # Log the update
+    audit_log = AuditLog(
+        id=str(uuid.uuid4()),
+        user_id=None,  # System event
+        action='specification_updated',
+        resource_type='specification',
+        resource_id=update.specification_id,
+        details={
+            'workspace_id': update.workspace_id,
+            'version': update.version,
+            'regulatory_event_id': update.regulatory_event_id,
+            'github_pr_url': update.github_pr_url
+        },
+        success=True,
+        timestamp=datetime.utcnow()
+    )
+    
+    db.add(audit_log)
+    await db.commit()
+    
+    print(f"📥 Specification updated: {update.specification_id} v{update.version}")
+    if update.github_pr_url:
+        print(f"🔗 GitHub PR: {update.github_pr_url}")
+    
+    return {
+        'status': 'received',
+        'specification_id': update.specification_id,
+        'logged': True
+    }
+
+# ============================================================================
+# BACKGROUND CONSUMER FOR KAFKA UPDATES
+# ============================================================================
+
+async def handle_specification_update(update: SpecificationUpdate):
+    """Callback for processing specification updates from Kafka"""
+    from database import async_session_maker
+    import uuid
+    
+    async with async_session_maker() as db:
+        # Same logging as webhook
+        audit_log = AuditLog(
+            id=str(uuid.uuid4()),
+            user_id=None,
+            action='specification_updated_kafka',
+            resource_type='specification',
+            resource_id=update.specification_id,
+            details=asdict(update),
+            success=True,
+            timestamp=datetime.utcnow()
+        )
+        
+        db.add(audit_log)
+        await db.commit()
+        
+        print(f"📥 [Kafka] Specification updated: {update.specification_id}")
+
+# ============================================================================
+# STARTUP/SHUTDOWN HANDLERS
+# ============================================================================
+
+async def start_kafka_integration():
+    """Start Kafka integration on application startup"""
+    try:
+        await kafka.start_producer()
+        # Start consumer in background
+        asyncio.create_task(kafka.start_consumer(handle_specification_update))
+        print("✅ Kafka integration started")
+    except Exception as e:
+        print(f"⚠️  Kafka integration failed to start: {e}")
+
+async def stop_kafka_integration():
+    """Stop Kafka integration on application shutdown"""
+    await kafka.stop_producer()
+    await kafka.stop_consumer()
+    await assure_code_client.close()
+    print("✅ Kafka integration stopped")
+
+# Add to main.py startup/shutdown events:
+"""
+@app.on_event("startup")
+async def startup():
+    await init_db()
+    await start_kafka_integration()
+
+@app.on_event("shutdown")
+async def shutdown():
+    await stop_kafka_integration()
+"""

@@ -1,0 +1,132 @@
+# ============================================================================
+# requirements.txt
+# ============================================================================
+fastapi==0.109.0
+uvicorn==0.27.0
+playwright==1.41.0
+beautifulsoup4==4.12.3
+langchain==0.1.0
+langchain-openai==0.0.2
+chromadb==0.4.22
+pypdf==4.0.0
+python-dotenv==1.0.0
+pydantic==2.5.3
+robotexclusionrulesparser==1.7.1
+aiohttp==3.9.1
+reportlab==4.0.9
+python-multipart==0.0.6
+
+# ============================================================================
+# .env (Create this file - DO NOT commit to git)
+# ============================================================================
+OPENAI_API_KEY=your-openai-api-key-here
+ANTHROPIC_API_KEY=your-anthropic-api-key-here  # Optional: for Claude instead of GPT-4
+
+# ============================================================================
+# .replit (for Replit deployment)
+# ============================================================================
+run = "python -m playwright install && uvicorn main:app --host 0.0.0.0 --port 8000"
+
+[nix]
+channel = "stable-23_11"
+
+[deployment]
+run = ["sh", "-c", "python -m playwright install && uvicorn main:app --host 0.0.0.0 --port 8000"]
+
+# ============================================================================
+# Dockerfile (for Docker deployment)
+# ============================================================================
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    wget \
+    gnupg \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Install Playwright browsers
+RUN playwright install --with-deps chromium
+
+# Copy application
+COPY . .
+
+# Create necessary directories
+RUN mkdir -p ./chroma_db ./reports
+
+# Expose port
+EXPOSE 8000
+
+# Run application
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+# ============================================================================
+# docker-compose.yml (for local development with Docker)
+# ============================================================================
+version: '3.8'
+
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    volumes:
+      - ./chroma_db:/app/chroma_db
+      - ./reports:/app/reports
+    restart: unless-stopped
+
+  # Optional: Add PostgreSQL for production
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: compliance_scraper
+      POSTGRES_USER: scraper
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+volumes:
+  postgres_data:
+
+# ============================================================================
+# .gitignore
+# ============================================================================
+# Environment
+.env
+.env.local
+*.pyc
+__pycache__/
+
+# Vector DB
+chroma_db/
+*.db
+
+# Reports
+reports/
+*.pdf
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Dependencies
+venv/
+env/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ============================================================================
+# README.md
+# ============================================================================

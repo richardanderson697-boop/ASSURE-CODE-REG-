@@ -1,0 +1,445 @@
+# 🔗 Compliance Scraper ↔️ ASSURE-CODE Integration
+
+## Overview
+
+This integration creates an **automated regulatory compliance pipeline** where:
+1. **Compliance Scraper** monitors and analyzes regulations using RAG
+2. **ASSURE-CODE** automatically regenerates technical specifications
+3. **GitHub Actions** creates pull requests for review
+
+---
+
+## 🌊 Complete Workflow
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    COMPLIANCE SCRAPER                           │
+│                                                                 │
+│  1. Scrape Regulation                                          │
+│     └─> https://sec.gov/rules/final/2024/new-rule.html        │
+│                                                                 │
+│  2. RAG Analysis                                               │
+│     ├─> Extract requirements                                   │
+│     ├─> Identify deadlines                                     │
+│     ├─> Detect affected entities                              │
+│     └─> Auto-detect compliance frameworks (GDPR, SOC2, etc.)  │
+│                                                                 │
+│  3. Create Regulatory Event                                    │
+│     └─> Structured JSON with all compliance metadata          │
+│                                                                 │
+│  4. Send to ASSURE-CODE                                        │
+│     ├─> Option A: REST API (sync)                             │
+│     └─> Option B: Kafka (async)                               │
+└─────────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                       ASSURE-CODE                               │
+│                                                                 │
+│  5. Receive Regulatory Event                                   │
+│     └─> POST /api/regulatory-events                           │
+│                                                                 │
+│  6. AI Analysis                                                │
+│     ├─> Identify affected workspaces                          │
+│     ├─> Identify affected specifications                      │
+│     └─> Determine required changes                            │
+│                                                                 │
+│  7. Regenerate Specifications                                  │
+│     ├─> Create new version                                    │
+│     ├─> Apply regulatory requirements                         │
+│     ├─> Add compliance annotations                            │
+│     └─> Link to regulatory event                              │
+│                                                                 │
+│  8. Trigger GitHub Action                                      │
+│     └─> repository_dispatch event                             │
+└─────────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                     GITHUB ACTIONS                              │
+│                                                                 │
+│  9. Create Pull Request                                        │
+│     ├─> Branch: compliance/reg-event-{id}                     │
+│     ├─> Updated specification files                           │
+│     ├─> Compliance checklist                                  │
+│     └─> Link to source regulation                             │
+│                                                                 │
+│  10. Notify Team                                               │
+│      └─> PR ready for review                                  │
+└─────────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                  FEEDBACK TO SCRAPER                            │
+│                                                                 │
+│  11. Webhook Callback                                          │
+│      └─> POST /api/v1/integration/webhook/specification-updated│
+│                                                                 │
+│  12. Audit Log                                                 │
+│      └─> Track which specs were updated                       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🚀 Quick Start Integration
+
+### Step 1: Configure Environment Variables
+
+```bash
+# .env for Compliance Scraper
+
+# Database (existing)
+DATABASE_URL=postgresql+asyncpg://scraper:password@localhost:5432/compliance_scraper
+OPENAI_API_KEY=sk-your-openai-key
+
+# ASSURE-CODE Integration (new)
+ASSURE_CODE_API_URL=https://assure-code.replit.app
+ASSURE_CODE_API_KEY=your-assure-code-api-key
+
+# Kafka (optional - for async messaging)
+KAFKA_BOOTSTRAP_SERVERS=localhost:9092
+```
+
+### Step 2: Update main.py
+
+```python
+# Add to main.py
+
+from assure_code_integration import (
+    router as integration_router,
+    start_kafka_integration,
+    stop_kafka_integration
+)
+
+# Register integration routes
+app.include_router(integration_router)
+
+# Add startup/shutdown events
+@app.on_event("startup")
+async def startup_event():
+    await init_db()
+    await start_kafka_integration()  # New
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    await stop_kafka_integration()  # New
+```
+
+### Step 3: Install Additional Dependencies
+
+```bash
+pip install aiokafka httpx
+```
+
+---
+
+## 📡 Usage Examples
+
+### Example 1: Automatic Integration (Recommended)
+
+Modify `execute_scrape_job` in main.py to auto-send to ASSURE-CODE:
+
+```python
+async def execute_scrape_job(job_id: str, request: ScrapeRequest):
+    """Execute scraping and RAG processing"""
+    
+    # ... existing scraping code ...
+    
+    # After analysis completes
+    if job.status == JobStatus.COMPLETED:
+        # Auto-send to ASSURE-CODE
+        try:
+            event_processor = RegulatoryEventProcessor()
+            event = await event_processor.process_scrape_job(db, job_id)
+            
+            if event:
+                # Send via REST API
+                assure_code_client = AssureCodeClient()
+                result = await assure_code_client.create_regulatory_event(event)
+                
+                print(f"✅ Sent to ASSURE-CODE: {result}")
+        except Exception as e:
+            print(f"⚠️  Failed to send to ASSURE-CODE: {e}")
+```
+
+### Example 2: Manual API Call
+
+```bash
+# After a scrape job completes, manually send to ASSURE-CODE
+
+curl -X POST http://localhost:8000/api/v1/integration/send-to-assure-code/550e8400 \
+  -H "Authorization: Bearer rcp_your_api_key" \
+  -d "method=rest"
+```
+
+### Example 3: Python Client
+
+```python
+import requests
+
+API_KEY = "rcp_your_api_key"
+BASE_URL = "http://localhost:8000"
+
+# 1. Create scrape job (as before)
+job = requests.post(
+    f"{BASE_URL}/api/v1/scrape",
+    headers={"Authorization": f"Bearer {API_KEY}"},
+    json={
+        "url": "https://www.sec.gov/rules/final/2024/new-data-privacy-rule.html",
+        "jurisdiction": "US",
+        "category": "finance"
+    }
+).json()
+
+job_id = job["job_id"]
+
+# 2. Wait for completion
+import time
+while True:
+    status = requests.get(
+        f"{BASE_URL}/api/v1/jobs/{job_id}",
+        headers={"Authorization": f"Bearer {API_KEY}"}
+    ).json()
+    
+    if status['status'] == 'completed':
+        break
+    time.sleep(5)
+
+# 3. Send to ASSURE-CODE
+integration = requests.post(
+    f"{BASE_URL}/api/v1/integration/send-to-assure-code/{job_id}",
+    headers={"Authorization": f"Bearer {API_KEY}"},
+    params={"method": "rest"}
+).json()
+
+print(f"Sent to ASSURE-CODE: {integration['event_id']}")
+
+# 4. Check which specs were affected (after ASSURE-CODE processes)
+time.sleep(10)  # Wait for ASSURE-CODE processing
+
+affected = requests.get(
+    f"{BASE_URL}/api/v1/integration/assure-code/affected-specs/{integration['event_id']}",
+    headers={"Authorization": f"Bearer {API_KEY}"}
+).json()
+
+print(f"Affected specifications: {len(affected['affected_specifications'])}")
+for spec in affected['affected_specifications']:
+    print(f"  - {spec['title']} (v{spec['version']})")
+```
+
+---
+
+## 🔄 Integration Flow Details
+
+### 1. Regulatory Event Structure
+
+The scraper sends this JSON to ASSURE-CODE:
+
+```json
+{
+  "event_id": "reg_event_550e8400",
+  "event_type": "new_regulation",
+  "title": "SEC Data Privacy Requirements for Financial Services 2024",
+  "jurisdiction": "US",
+  "category": "finance",
+  "effective_date": "2026-06-01",
+  "source_url": "https://www.sec.gov/rules/final/2024/new-rule.html",
+  
+  "summary": "New requirements for handling customer financial data...",
+  "key_requirements": [
+    "Implement multi-factor authentication for all customer accounts",
+    "Encrypt all customer data at rest using AES-256",
+    "Maintain audit logs for minimum 7 years",
+    "Conduct annual third-party security audits"
+  ],
+  "affected_entities": [
+    "Broker-dealers",
+    "Investment advisers",
+    "FinTech platforms",
+    "Cryptocurrency exchanges"
+  ],
+  "compliance_deadlines": [
+    {
+      "date": "March 1, 2026",
+      "description": "Phase 1: MFA implementation required"
+    },
+    {
+      "date": "June 1, 2026",
+      "description": "Full compliance deadline"
+    }
+  ],
+  "penalties": "Fines up to $500,000 per violation, potential license suspension",
+  
+  "compliance_frameworks": ["SOC2", "PCI-DSS", "SEC", "GDPR"],
+  
+  "scraped_at": "2026-01-08T10:30:00Z",
+  "scrape_job_id": "550e8400-e29b-41d4-a716-446655440000",
+  "analysis_confidence": 0.85,
+  
+  "full_text": "The full regulation text for RAG embedding..."
+}
+```
+
+### 2. ASSURE-CODE Processing
+
+When ASSURE-CODE receives this event:
+
+1. **Stores in `regulatory_events` table**
+2. **Embeddings created** from `full_text` using pgvector
+3. **AI analysis** finds affected specifications:
+   - Searches workspaces by category ("finance")
+   - Semantic search for related specs
+   - Identifies which modules need updates
+4. **Auto-regeneration** for each affected spec:
+   - Creates new version
+   - Applies requirements from event
+   - Adds compliance annotations
+   - Links to `regulatory_event_id`
+5. **GitHub PR creation** via repository_dispatch
+
+### 3. Webhook Callback
+
+ASSURE-CODE sends back confirmation:
+
+```json
+{
+  "specification_id": "spec_abc123",
+  "workspace_id": "ws_xyz789",
+  "version": 2,
+  "change_reason": "Updated per regulatory event reg_event_550e8400",
+  "regulatory_event_id": "reg_event_550e8400",
+  "updated_at": "2026-01-08T10:35:00Z",
+  "github_pr_url": "https://github.com/company/specs/pull/42"
+}
+```
+
+---
+
+## 🎯 Benefits of This Integration
+
+### 1. **Automated Compliance**
+- New regulations automatically trigger spec updates
+- No manual monitoring needed
+- Reduces compliance lag time from weeks to minutes
+
+### 2. **Traceability**
+- Every spec change linked to source regulation
+- Full audit trail maintained
+- GitHub PRs include regulation references
+
+### 3. **AI-Powered Intelligence**
+- RAG analysis extracts structured requirements
+- Auto-detects applicable compliance frameworks
+- Identifies affected entities and deadlines
+
+### 4. **Developer-Friendly**
+- Changes arrive as GitHub PRs
+- Team reviews before merging
+- Maintains git history and version control
+
+### 5. **Scalable**
+- Kafka support for high-volume environments
+- Async processing doesn't block scraping
+- Multiple ASSURE-CODE instances supported
+
+---
+
+## 🔧 Configuration Options
+
+### REST API vs Kafka
+
+**Use REST API when:**
+- Low volume (< 100 events/day)
+- Need immediate confirmation
+- Simpler infrastructure
+- Starting out
+
+**Use Kafka when:**
+- High volume (> 100 events/day)
+- Need decoupling
+- Already have Kafka infrastructure
+- Enterprise deployment
+
+### Auto vs Manual Sending
+
+**Automatic (Recommended):**
+```python
+# In execute_scrape_job, after analysis completes
+await send_to_assure_code(job_id)
+```
+
+**Manual (For Testing):**
+```bash
+# Send via API endpoint
+curl -X POST .../send-to-assure-code/{job_id}
+```
+
+---
+
+## 📊 Monitoring Integration
+
+### View Sent Events
+
+```sql
+-- Check audit logs for sent events
+SELECT 
+    action,
+    details->>'event_id' as event_id,
+    details->>'method' as method,
+    timestamp
+FROM audit_logs
+WHERE action LIKE '%regulatory%'
+ORDER BY timestamp DESC;
+```
+
+### Track Specification Updates
+
+```sql
+-- See which specs were updated
+SELECT 
+    resource_id as spec_id,
+    details->>'version' as version,
+    details->>'github_pr_url' as pr_url,
+    timestamp
+FROM audit_logs
+WHERE action = 'specification_updated'
+ORDER BY timestamp DESC;
+```
+
+---
+
+## 🆘 Troubleshooting
+
+### Event Not Appearing in ASSURE-CODE
+
+1. Check API key is valid
+2. Verify ASSURE_CODE_API_URL is correct
+3. Check network connectivity
+4. View scraper logs for errors
+
+### Specifications Not Regenerating
+
+1. Check if workspace exists in ASSURE-CODE
+2. Verify category matches workspace category
+3. Check ASSURE-CODE logs for processing errors
+4. Ensure AI has detected affected specs
+
+### GitHub PR Not Created
+
+1. Verify GitHub configuration in ASSURE-CODE workspace
+2. Check GitHub Actions are enabled
+3. Ensure repository_dispatch event is configured
+4. Review ASSURE-CODE GitHub integration logs
+
+---
+
+## 🎓 Next Steps
+
+1. ✅ **Setup integration** following Quick Start
+2. 🧪 **Test with sample regulation** using manual API call
+3. 🔄 **Enable automatic sending** in scrape job
+4. 📊 **Monitor** audit logs and GitHub PRs
+5. 🚀 **Scale** to Kafka if needed
+
+**Your automated compliance pipeline is ready!** 🎉

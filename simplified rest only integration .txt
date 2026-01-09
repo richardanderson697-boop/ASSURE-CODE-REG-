@@ -1,0 +1,148 @@
+# simplified_integration.py - REST-only Integration (No Kafka Required)
+
+"""
+Simplified ASSURE-CODE integration using REST API only.
+Add to main.py to enable optional integration without Kafka dependency.
+"""
+
+import os
+import httpx
+from typing import Optional
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+
+from database import get_db, ScrapeJob, ComplianceAnalysis, AuditLog
+from assure_code_integration import (
+    RegulatoryEvent,
+    RegulatoryEventProcessor,
+    AssureCodeClient
+)
+
+router = APIRouter(prefix="/api/v1/assure-code", tags=["ASSURE-CODE"])
+
+# Simple feature flag - enable/disable integration
+ASSURE_CODE_ENABLED = os.getenv("ASSURE_CODE_ENABLED", "false").lower() == "true"
+
+@router.get("/status")
+async def integration_status():
+    """Check if ASSURE-CODE integration is enabled"""
+    return {
+        "enabled": ASSURE_CODE_ENABLED,
+        "api_url": os.getenv("ASSURE_CODE_API_URL") if ASSURE_CODE_ENABLED else None,
+        "mode": "rest-only"
+    }
+
+@router.post("/send/{job_id}")
+async def send_to_assure_code(
+    job_id: str,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Send completed scrape job to ASSURE-CODE (REST API only)
+    This is optional - only runs if ASSURE_CODE_ENABLED=true
+    """
+    
+    if not ASSURE_CODE_ENABLED:
+        return {
+            "status": "disabled",
+            "message": "ASSURE-CODE integration is not enabled. Set ASSURE_CODE_ENABLED=true to activate."
+        }
+    
+    # Process job into regulatory event
+    processor = RegulatoryEventProcessor()
+    event = await processor.process_scrape_job(db, job_id)
+    
+    if not event:
+        raise HTTPException(404, "Job or analysis not found")
+    
+    # Send to ASSURE-CODE
+    background_tasks.add_task(send_event_async, event, db, job_id)
+    
+    return {
+        "status": "queued",
+        "event_id": event.event_id,
+        "message": "Event queued for delivery to ASSURE-CODE"
+    }
+
+async def send_event_async(event: RegulatoryEvent, db: AsyncSession, job_id: str):
+    """Background task to send event to ASSURE-CODE"""
+    import uuid
+    from datetime import datetime
+    
+    try:
+        client = AssureCodeClient()
+        result = await client.create_regulatory_event(event)
+        
+        # Log success
+        audit_log = AuditLog(
+            id=str(uuid.uuid4()),
+            user_id=None,
+            action='sent_to_assure_code',
+            resource_type='scrape_job',
+            resource_id=job_id,
+            details={
+                'event_id': event.event_id,
+                'assure_code_response': result
+            },
+            success=True,
+            timestamp=datetime.utcnow()
+        )
+        db.add(audit_log)
+        await db.commit()
+        
+        print(f"✅ Sent to ASSURE-CODE: {event.event_id}")
+        
+    except Exception as e:
+        # Log failure
+        audit_log = AuditLog(
+            id=str(uuid.uuid4()),
+            user_id=None,
+            action='sent_to_assure_code',
+            resource_type='scrape_job',
+            resource_id=job_id,
+            success=False,
+            error_message=str(e),
+            timestamp=datetime.utcnow()
+        )
+        db.add(audit_log)
+        await db.commit()
+        
+        print(f"❌ Failed to send to ASSURE-CODE: {e}")
+
+@router.post("/auto-send/enable")
+async def enable_auto_send():
+    """Enable automatic sending to ASSURE-CODE after job completion"""
+    # This would update a setting in database
+    return {
+        "status": "enabled",
+        "message": "Auto-send to ASSURE-CODE enabled. All completed jobs will be sent automatically."
+    }
+
+@router.post("/auto-send/disable")
+async def disable_auto_send():
+    """Disable automatic sending"""
+    return {
+        "status": "disabled",
+        "message": "Auto-send disabled. Jobs will only be sent manually."
+    }
+
+# Add this to main.py:
+"""
+# In main.py
+
+from simplified_integration import router as assure_code_router
+
+app.include_router(assure_code_router)
+
+# Optional: Auto-send after job completion
+# In execute_scrape_job, add after job completes:
+
+if job.status == JobStatus.COMPLETED and os.getenv("ASSURE_CODE_AUTO_SEND") == "true":
+    processor = RegulatoryEventProcessor()
+    event = await processor.process_scrape_job(db, job_id)
+    if event:
+        client = AssureCodeClient()
+        await client.create_regulatory_event(event)
+"""

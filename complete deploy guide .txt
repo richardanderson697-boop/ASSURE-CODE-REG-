@@ -1,0 +1,525 @@
+# 🚀 Compliance Scraper - Complete Deployment Guide
+
+## 📋 Table of Contents
+
+1. [Local Development Setup](#local-development-setup)
+2. [Replit Deployment](#replit-deployment)
+3. [Railway Deployment](#railway-deployment)
+4. [Database Management](#database-management)
+5. [API Usage Examples](#api-usage-examples)
+
+---
+
+## 🏠 Local Development Setup
+
+### Prerequisites
+
+- Python 3.11+
+- Docker & Docker Compose (for PostgreSQL)
+- OpenAI API Key
+
+### Step 1: Clone/Setup Project
+
+```bash
+# Create project directory
+mkdir compliance-scraper
+cd compliance-scraper
+
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
+```
+
+### Step 2: Install Dependencies
+
+```bash
+# Install Python packages
+pip install -r requirements.txt
+
+# Install Playwright browsers
+python -m playwright install chromium
+```
+
+### Step 3: Start PostgreSQL
+
+```bash
+# Start PostgreSQL with Docker Compose
+docker-compose up -d db
+
+# Verify it's running
+docker-compose ps
+```
+
+### Step 4: Configure Environment
+
+Create `.env` file:
+
+```bash
+DATABASE_URL=postgresql+asyncpg://scraper:password@localhost:5432/compliance_scraper
+OPENAI_API_KEY=sk-your-openai-key-here
+ENVIRONMENT=development
+```
+
+### Step 5: Initialize Database
+
+```bash
+# Run setup script
+python setup_database.py init
+```
+
+This will:
+- Create all database tables
+- Create a demo organization
+- Generate your first API key
+
+**Save the API key shown - you'll need it!**
+
+### Step 6: Start Application
+
+```bash
+# Run the API server
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
+
+# Server runs at: http://localhost:8000
+# API docs at: http://localhost:8000/docs
+```
+
+---
+
+## ☁️ Replit Deployment
+
+### Option 1: Quick Deploy (No PostgreSQL)
+
+1. **Create New Replit**
+   - Template: Python
+   - Upload: `main.py`, `database.py`, `requirements.txt`
+
+2. **Configure Secrets**
+   - Go to "Secrets" (🔒 icon)
+   - Add: `OPENAI_API_KEY` = `sk-your-key`
+
+3. **Setup Database**
+   - Replit provides PostgreSQL addon
+   - Click "Database" tab → Enable PostgreSQL
+   - Copy connection string to Secrets as `DATABASE_URL`
+
+4. **Initialize**
+   ```bash
+   # In Replit shell
+   python setup_database.py init
+   ```
+
+5. **Run**
+   - Click "Run" button
+   - Server starts automatically
+
+### Option 2: External PostgreSQL
+
+Use [Supabase](https://supabase.com) or [ElephantSQL](https://elephantsql.com) for managed PostgreSQL:
+
+1. Create database on Supabase (free tier)
+2. Copy connection string (pooler connection)
+3. Add to Replit Secrets:
+   ```
+   DATABASE_URL=postgresql+asyncpg://user:pass@host:5432/db
+   ```
+
+---
+
+## 🚂 Railway Deployment
+
+Railway provides managed PostgreSQL and is perfect for production.
+
+### Step 1: Setup Railway Project
+
+```bash
+# Install Railway CLI
+npm i -g @railway/cli
+
+# Login
+railway login
+
+# Initialize project
+railway init
+```
+
+### Step 2: Add PostgreSQL Database
+
+1. Go to Railway dashboard
+2. Click "New" → "Database" → "PostgreSQL"
+3. Railway automatically creates `DATABASE_URL` variable
+
+### Step 3: Configure Application
+
+1. In Railway dashboard, add variables:
+   - `OPENAI_API_KEY` = your OpenAI key
+   - `ENVIRONMENT` = production
+
+2. Deploy from GitHub:
+   ```bash
+   # Link GitHub repo
+   railway link
+   
+   # Deploy
+   railway up
+   ```
+
+### Step 4: Initialize Database
+
+```bash
+# Run setup via Railway CLI
+railway run python setup_database.py init
+```
+
+### Step 5: Access Your API
+
+Railway provides a public URL: `https://your-app.railway.app`
+
+---
+
+## 💾 Database Management
+
+### Create New Organization
+
+```bash
+python setup_database.py create-org
+```
+
+Interactive prompts for:
+- Organization name
+- Admin email
+- Subscription tier
+
+### Database Migrations
+
+When you update models:
+
+```bash
+# Generate migration
+alembic revision --autogenerate -m "description"
+
+# Apply migration
+alembic upgrade head
+
+# Rollback
+alembic downgrade -1
+```
+
+### Backup Database
+
+```bash
+# Using Docker
+docker-compose exec db pg_dump -U scraper compliance_scraper > backup.sql
+
+# Restore
+docker-compose exec -T db psql -U scraper compliance_scraper < backup.sql
+```
+
+### View Database
+
+```bash
+# Connect to PostgreSQL
+docker-compose exec db psql -U scraper compliance_scraper
+
+# Useful queries
+SELECT * FROM organizations;
+SELECT * FROM users;
+SELECT * FROM scrape_jobs ORDER BY created_at DESC LIMIT 10;
+SELECT * FROM api_keys WHERE is_active = true;
+```
+
+---
+
+## 🔌 API Usage Examples
+
+### 1. Create Scraping Job
+
+```bash
+curl -X POST http://localhost:8000/api/v1/scrape \
+  -H "Authorization: Bearer rcp_your_api_key_here" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://www.sec.gov/rules/final/2024/example.html",
+    "jurisdiction": "US",
+    "category": "finance",
+    "respect_robots_txt": true,
+    "rate_limit_ms": 2000
+  }'
+```
+
+Response:
+```json
+{
+  "job_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "queued",
+  "progress": 0,
+  "url": "https://www.sec.gov/rules/final/2024/example.html",
+  "started_at": "2026-01-08T10:30:00Z",
+  "documents_scraped": 0
+}
+```
+
+### 2. Check Job Status
+
+```bash
+curl -X GET http://localhost:8000/api/v1/jobs/{job_id} \
+  -H "Authorization: Bearer rcp_your_api_key_here"
+```
+
+### 3. Ask RAG Questions
+
+```bash
+curl -X POST http://localhost:8000/api/v1/analyze \
+  -H "Authorization: Bearer rcp_your_api_key_here" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "job_id": "550e8400-e29b-41d4-a716-446655440000",
+    "question": "What are the key compliance deadlines?"
+  }'
+```
+
+### 4. Export Data
+
+```bash
+# Export as JSON
+curl -X GET http://localhost:8000/api/v1/export/json/{job_id} \
+  -H "Authorization: Bearer rcp_your_api_key_here" \
+  > compliance_data.json
+
+# Send to your platform
+curl -X POST https://your-platform.com/api/import \
+  -H "Authorization: Bearer your-platform-key" \
+  -H "Content-Type: application/json" \
+  -d @compliance_data.json
+```
+
+### 5. Python Client Example
+
+```python
+import requests
+import time
+
+API_KEY = "rcp_your_api_key_here"
+BASE_URL = "http://localhost:8000"
+
+headers = {
+    "Authorization": f"Bearer {API_KEY}",
+    "Content-Type": "application/json"
+}
+
+# Create job
+response = requests.post(
+    f"{BASE_URL}/api/v1/scrape",
+    json={
+        "url": "https://www.sec.gov/rules/final/2024/example.html",
+        "jurisdiction": "US",
+        "category": "finance"
+    },
+    headers=headers
+)
+job = response.json()
+job_id = job["job_id"]
+
+print(f"Job created: {job_id}")
+
+# Wait for completion
+while True:
+    status = requests.get(
+        f"{BASE_URL}/api/v1/jobs/{job_id}",
+        headers=headers
+    ).json()
+    
+    print(f"Status: {status['status']} ({status['progress']}%)")
+    
+    if status['status'] == 'completed':
+        break
+    
+    time.sleep(5)
+
+# Ask questions
+questions = [
+    "What are the main compliance requirements?",
+    "What are the key deadlines?",
+    "What are the penalties for non-compliance?"
+]
+
+for question in questions:
+    result = requests.post(
+        f"{BASE_URL}/api/v1/analyze",
+        json={"job_id": job_id, "question": question},
+        headers=headers
+    ).json()
+    
+    print(f"\nQ: {question}")
+    print(f"A: {result['answer']}\n")
+
+# Export
+data = requests.get(
+    f"{BASE_URL}/api/v1/export/json/{job_id}",
+    headers=headers
+).json()
+
+print(f"Exported {len(data)} analysis findings")
+```
+
+---
+
+## 🔧 Troubleshooting
+
+### Database Connection Fails
+
+```bash
+# Check PostgreSQL is running
+docker-compose ps
+
+# View logs
+docker-compose logs db
+
+# Restart database
+docker-compose restart db
+```
+
+### Playwright Installation Issues
+
+```bash
+# Install with system dependencies
+python -m playwright install --with-deps chromium
+
+# On Linux, may need additional packages
+sudo apt-get install -y libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0
+```
+
+### ChromaDB Persistence Issues
+
+```bash
+# Create directory with correct permissions
+mkdir -p chroma_db
+chmod 755 chroma_db
+
+# Clear corrupted data
+rm -rf chroma_db/*
+```
+
+### OpenAI Rate Limits
+
+Add retry logic or use Azure OpenAI:
+
+```python
+# In .env
+OPENAI_API_TYPE=azure
+AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
+AZURE_OPENAI_API_KEY=your-azure-key
+```
+
+---
+
+## 📊 Monitoring & Logs
+
+### View Application Logs
+
+```bash
+# Docker Compose
+docker-compose logs -f api
+
+# Local development
+# Logs appear in terminal running uvicorn
+```
+
+### View Audit Logs
+
+```sql
+-- Recent user actions
+SELECT 
+    u.email,
+    a.action,
+    a.timestamp,
+    a.details
+FROM audit_logs a
+JOIN users u ON a.user_id = u.id
+ORDER BY a.timestamp DESC
+LIMIT 50;
+
+-- Failed operations
+SELECT * FROM audit_logs
+WHERE success = false
+ORDER BY timestamp DESC;
+```
+
+### Monitor Job Performance
+
+```sql
+-- Average job completion time
+SELECT 
+    AVG(EXTRACT(EPOCH FROM (completed_at - started_at))) as avg_seconds,
+    jurisdiction,
+    category
+FROM scrape_jobs
+WHERE status = 'completed'
+GROUP BY jurisdiction, category;
+
+-- Job failure rate
+SELECT 
+    COUNT(*) FILTER (WHERE status = 'failed') * 100.0 / COUNT(*) as failure_rate,
+    DATE(started_at) as date
+FROM scrape_jobs
+GROUP BY DATE(started_at)
+ORDER BY date DESC;
+```
+
+---
+
+## 🔐 Security Checklist
+
+- [ ] Change default database password
+- [ ] Use environment variables for all secrets
+- [ ] Enable HTTPS in production
+- [ ] Implement rate limiting per organization
+- [ ] Regular database backups
+- [ ] Monitor audit logs for suspicious activity
+- [ ] Rotate API keys periodically
+- [ ] Keep dependencies updated
+
+---
+
+## 📈 Scaling Considerations
+
+### For High Volume (1000+ jobs/day):
+
+1. **Use Redis for Job Queue**
+   - Install Celery + Redis
+   - Move background tasks to Celery workers
+
+2. **Separate Vector Store**
+   - Use Pinecone or Weaviate instead of ChromaDB
+   - Better for multi-instance deployments
+
+3. **Database Optimization**
+   - Add indexes on frequently queried columns
+   - Use connection pooling (PgBouncer)
+   - Consider read replicas
+
+4. **Load Balancing**
+   - Deploy multiple API instances
+   - Use NGINX or cloud load balancer
+
+---
+
+## 🆘 Support
+
+For issues or questions:
+- Check logs first
+- Review this guide
+- Check database connectivity
+- Verify API keys are active
+
+---
+
+## 📝 Next Steps
+
+1. ✅ Setup complete? Test with example API calls
+2. 📊 Create additional organizations for different teams
+3. 🔑 Generate API keys for team members
+4. 📈 Monitor usage and scale as needed
+5. 🚀 Integrate with your platform
+
+**Your compliance scraper is ready to use!**
